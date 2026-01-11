@@ -24,3 +24,10 @@ vector_add_graph
 .DS_Store
 .vscode/
 .idea/
+build/
+*.o
+*.out
+*.exe
+*.log
+*.csv
+*.png
