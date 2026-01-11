@@ -18,9 +18,10 @@ mkdir build && cd build
 cmake ..
 make
 python3 plot_results.py
-
+```
 
 or
+```bash
 # 1. Compile CUDA code
 nvcc vector_add_graph_events.cu -o vector_add_graph
 
@@ -44,3 +45,22 @@ This repository benchmarks **normal kernel**, **CUDA Graph kernel-only**, and **
 ![Benchmark Plot](benchmark_plot.png)
 
 > CUDA Graph provides slight speedup for kernel-only execution. End-to-end timing is dominated by Host ↔ Device memory copies.
+
+
+## Run Benchmark
+
+You can compile, run, and plot the CUDA vector addition benchmark **with a single command**:
+
+```bash
+chmod +x run_benchmark.sh
+./run_benchmark.sh
+```
+Example Output
+```bash
+A = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, ...]
+B = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, ...]
+C = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, ...]
+Kernel-only avg time: 0.33 ms
+CUDA Graph kernel-only avg time: 0.30 ms
+End-to-end avg time: 4.44 ms
+```

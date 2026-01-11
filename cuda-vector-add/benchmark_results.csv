@@ -1,4 +1,4 @@
 Benchmark,AvgTimeMs
-KernelOnly,0.326192
-CUDAGraphKernelOnly,0.324473
-EndToEnd,4.45547
+KernelOnly,0.326412
+CUDAGraphKernelOnly,0.324622
+EndToEnd,4.48266
