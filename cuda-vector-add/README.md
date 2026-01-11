@@ -41,7 +41,7 @@ This repository benchmarks **normal kernel**, **CUDA Graph kernel-only**, and **
 | Kernel-only                | 0.33          | 1x                     |
 | CUDA Graph kernel-only      | 0.30          | 1.10x                  |
 | End-to-end (with memcpy)    | 4.44          | 0.07x                  |
-
+```
 ![Benchmark Plot]("benchmark_plot.png")
 <img
 src=“benchmark_plot.png”
@@ -49,6 +49,7 @@ raw=true
 alt=“Subject Benchmark”
 style=“margin-right: 10px;”
 />
+
 > CUDA Graph provides slight speedup for kernel-only execution. End-to-end timing is dominated by Host ↔ Device memory copies.
 
 
