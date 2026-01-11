@@ -14,3 +14,6 @@ set_target_properties(vector_add PROPERTIES
 add_executable(vector_add_graph
     src/vector_add_graph.cu
 )
+add_executable(vector_add_graph_events
+    src/vector_add_graph_events.cu
+)
