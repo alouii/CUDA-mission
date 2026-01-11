@@ -1,0 +1,26 @@
+# Build folders
+build/
+cmake-build-*/
+
+# CUDA / CMake
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# Binaries
+vector_add
+vector_add_graph
+
+# Profiling outputs
+*.qdrep
+*.nsys-rep
+*.sqlite
+*.ncu-rep
+
+# OS / editor
+*.swp
+*.log
+.DS_Store
+.vscode/
+.idea/
