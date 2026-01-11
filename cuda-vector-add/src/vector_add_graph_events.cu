@@ -1,6 +1,6 @@
 #include <iostream>
 #include <cuda_runtime.h>
-
+#include <fstream>
 #define CUDA_CHECK(call)                                      \
     do {                                                      \
         cudaError_t err = call;                               \
@@ -95,6 +95,17 @@ int main() {
     // ---------------- Results ----------------
     std::cout << "C[0] = " << h_C[0] << "\n";
     std::cout << "Speedup: " << (normalTimeMs / graphTimeMs) << "x\n";
+    std::cout << "C[0] = " << h_C[0] << "\n";
+    std::cout << "Normal kernel avg time: " << (normalTimeMs / iterations) << " ms\n";
+    std::cout << "CUDA Graph avg time: " << (graphTimeMs / iterations) << " ms\n";
+    std::cout << "Speedup: " << (normalTimeMs / graphTimeMs) << "x\n";
+
+    // Save to CSV for plotting
+    std::ofstream fout("benchmark_results.csv");
+    fout << "Kernel,AvgTimeMs\n";
+    fout << "Normal," << (normalTimeMs / iterations) << "\n";
+    fout << "CUDAGraph," << (graphTimeMs / iterations) << "\n";
+    fout.close();
 
     // ---------------- Cleanup ----------------
     cudaGraphExecDestroy(graphExec);
