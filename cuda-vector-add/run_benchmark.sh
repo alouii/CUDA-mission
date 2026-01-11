@@ -3,7 +3,7 @@ set -e
 
 # ------------------------- Step 1: Compile CUDA program -------------------------
 echo "Compiling CUDA program..."
-nvcc vector_add_graph_events.cu -o vector_add_graph
+nvcc src/vector_add_graph_events.cu -o vector_add_graph
 
 # ------------------------- Step 2: Run benchmark -------------------------
 echo "Running CUDA benchmark..."
