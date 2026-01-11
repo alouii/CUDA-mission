@@ -1,10 +1,10 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Read benchmark CSV
+# Read CSV
 df = pd.read_csv("benchmark_results.csv")
 
-plt.figure(figsize=(7,4))
+plt.figure(figsize=(8,5))
 colors = ['skyblue', 'orange', 'green']
 plt.bar(df['Benchmark'], df['AvgTimeMs'], color=colors)
 plt.ylabel("Average Time (ms)")
