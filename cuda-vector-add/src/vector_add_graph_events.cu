@@ -1,6 +1,7 @@
 #include <iostream>
-#include <cuda_runtime.h>
 #include <fstream>
+#include <cuda_runtime.h>
+
 #define CUDA_CHECK(call)                                      \
     do {                                                      \
         cudaError_t err = call;                               \
@@ -20,11 +21,10 @@ __global__ void vectorAdd(const float* A, const float* B, float* C, int N) {
 }
 
 int main() {
-    const int N = 1 << 22;  // 4M elements
+    const int N = 1 << 22; // 4M elements
     const size_t size = N * sizeof(float);
     const int iterations = 1000;
 
-    // Allocate pinned host memory
     float *h_A, *h_B, *h_C;
     CUDA_CHECK(cudaMallocHost(&h_A, size));
     CUDA_CHECK(cudaMallocHost(&h_B, size));
@@ -35,7 +35,6 @@ int main() {
         h_B[i] = float(2 * i);
     }
 
-    // Allocate device memory
     float *d_A, *d_B, *d_C;
     CUDA_CHECK(cudaMalloc(&d_A, size));
     CUDA_CHECK(cudaMalloc(&d_B, size));
@@ -44,40 +43,33 @@ int main() {
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
 
-    // ---------------- Warm-up ----------------
+    // ------------------------- Host → Device copy -------------------------
     CUDA_CHECK(cudaMemcpyAsync(d_A, h_A, size, cudaMemcpyHostToDevice, stream));
     CUDA_CHECK(cudaMemcpyAsync(d_B, h_B, size, cudaMemcpyHostToDevice, stream));
-    vectorAdd<<<(N+255)/256, 256, 0, stream>>>(d_A, d_B, d_C, N);
-    CUDA_CHECK(cudaMemcpyAsync(h_C, d_C, size, cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    // ---------------- Normal kernel profiling with CUDA Events ----------------
+    // ------------------------- Kernel-only normal timing -------------------------
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
 
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int i = 0; i < iterations; ++i) {
-        vectorAdd<<<(N+255)/256, 256, 0, stream>>>(d_A, d_B, d_C, N);
+        vectorAdd<<<(N + 255) / 256, 256, 0, stream>>>(d_A, d_B, d_C, N);
     }
     CUDA_CHECK(cudaEventRecord(stop, stream));
     CUDA_CHECK(cudaEventSynchronize(stop));
 
-    float normalTimeMs = 0;
-    CUDA_CHECK(cudaEventElapsedTime(&normalTimeMs, start, stop));
-    std::cout << "Normal kernel avg time: " << (normalTimeMs / iterations) << " ms\n";
+    float kernelOnlyMs = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&kernelOnlyMs, start, stop));
+    float kernelOnlyAvg = kernelOnlyMs / iterations;
 
-    // ---------------- CUDA Graph profiling with CUDA Events ----------------
+    // ------------------------- Kernel-only CUDA Graph timing -------------------------
     cudaGraph_t graph;
     cudaGraphExec_t graphExec;
 
     CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-
-    CUDA_CHECK(cudaMemcpyAsync(d_A, h_A, size, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(d_B, h_B, size, cudaMemcpyHostToDevice, stream));
-    vectorAdd<<<(N+255)/256, 256, 0, stream>>>(d_A, d_B, d_C, N);
-    CUDA_CHECK(cudaMemcpyAsync(h_C, d_C, size, cudaMemcpyDeviceToHost, stream));
-
+    vectorAdd<<<(N + 255) / 256, 256, 0, stream>>>(d_A, d_B, d_C, N);
     CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
     CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
 
@@ -88,35 +80,47 @@ int main() {
     CUDA_CHECK(cudaEventRecord(stop, stream));
     CUDA_CHECK(cudaEventSynchronize(stop));
 
-    float graphTimeMs = 0;
-    CUDA_CHECK(cudaEventElapsedTime(&graphTimeMs, start, stop));
-    std::cout << "CUDA Graph avg time: " << (graphTimeMs / iterations) << " ms\n";
+    float graphOnlyMs = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&graphOnlyMs, start, stop));
+    float graphOnlyAvg = graphOnlyMs / iterations;
 
-    // ---------------- Results ----------------
-    std::cout << "C[0] = " << h_C[0] << "\n";
-    std::cout << "Speedup: " << (normalTimeMs / graphTimeMs) << "x\n";
-    std::cout << "C[0] = " << h_C[0] << "\n";
-    std::cout << "Normal kernel avg time: " << (normalTimeMs / iterations) << " ms\n";
-    std::cout << "CUDA Graph avg time: " << (graphTimeMs / iterations) << " ms\n";
-    std::cout << "Speedup: " << (normalTimeMs / graphTimeMs) << "x\n";
+    // ------------------------- End-to-end including memory -------------------------
+    CUDA_CHECK(cudaEventRecord(start, stream));
+    for (int i = 0; i < iterations; ++i) {
+        CUDA_CHECK(cudaMemcpyAsync(d_A, h_A, size, cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_B, h_B, size, cudaMemcpyHostToDevice, stream));
+        vectorAdd<<<(N + 255) / 256, 256, 0, stream>>>(d_A, d_B, d_C, N);
+        CUDA_CHECK(cudaMemcpyAsync(h_C, d_C, size, cudaMemcpyDeviceToHost, stream));
+    }
+    CUDA_CHECK(cudaEventRecord(stop, stream));
+    CUDA_CHECK(cudaEventSynchronize(stop));
 
-    // Save to CSV for plotting
+    float totalMs = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&totalMs, start, stop));
+    float totalAvg = totalMs / iterations;
+
+    // ------------------------- Print results -------------------------
+    std::cout << "C[0] = " << h_C[0] << "\n";
+    std::cout << "Kernel-only avg time: " << kernelOnlyAvg << " ms\n";
+    std::cout << "CUDA Graph kernel-only avg time: " << graphOnlyAvg << " ms\n";
+    std::cout << "End-to-end (including memcpy) avg time: " << totalAvg << " ms\n";
+
+    // ------------------------- Save CSV -------------------------
     std::ofstream fout("benchmark_results.csv");
-    fout << "Kernel,AvgTimeMs\n";
-    fout << "Normal," << (normalTimeMs / iterations) << "\n";
-    fout << "CUDAGraph," << (graphTimeMs / iterations) << "\n";
+    fout << "Benchmark,AvgTimeMs\n";
+    fout << "KernelOnly," << kernelOnlyAvg << "\n";
+    fout << "CUDAGraphKernelOnly," << graphOnlyAvg << "\n";
+    fout << "EndToEnd," << totalAvg << "\n";
     fout.close();
 
-    // ---------------- Cleanup ----------------
+    // ------------------------- Cleanup -------------------------
     cudaGraphExecDestroy(graphExec);
     cudaGraphDestroy(graph);
-
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-    cudaFreeHost(h_A);
-    cudaFreeHost(h_B);
-    cudaFreeHost(h_C);
+    cudaFree(d_A); cudaFree(d_B); cudaFree(d_C);
+    cudaFreeHost(h_A); cudaFreeHost(h_B); cudaFreeHost(h_C);
+    cudaEventDestroy(start); cudaEventDestroy(stop);
     cudaStreamDestroy(stream);
     cudaDeviceReset();
+
+    return 0;
 }

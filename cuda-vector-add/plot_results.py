@@ -1,14 +1,14 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Read CSV
+# Read benchmark CSV
 df = pd.read_csv("benchmark_results.csv")
 
-# Plot
-plt.figure(figsize=(6,4))
-plt.bar(df['Kernel'], df['AvgTimeMs'], color=['skyblue', 'orange'])
+plt.figure(figsize=(7,4))
+colors = ['skyblue', 'orange', 'green']
+plt.bar(df['Benchmark'], df['AvgTimeMs'], color=colors)
 plt.ylabel("Average Time (ms)")
-plt.title("CUDA Kernel vs CUDA Graph Performance")
+plt.title("CUDA Kernel Benchmark: Normal vs CUDA Graph vs End-to-End")
 for i, v in enumerate(df['AvgTimeMs']):
     plt.text(i, v + 0.05, f"{v:.2f} ms", ha='center')
 plt.tight_layout()
