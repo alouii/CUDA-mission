@@ -2,142 +2,148 @@
 #include <cuda_runtime.h>
 #include <cmath>
 
-#define CHECK_CUDA(call)                                   \
-do {                                                       \
-    cudaError_t err = call;                                \
-    if (err != cudaSuccess) {                              \
-        std::cerr << "CUDA error at " << __FILE__ << ":"   \
-                  << __LINE__ << " -> "                    \
-                  << cudaGetErrorString(err) << std::endl;\
-        exit(EXIT_FAILURE);                                \
-    }                                                      \
+#define CHECK_CUDA(call)                                     \
+do {                                                         \
+    cudaError_t err = call;                                  \
+    if (err != cudaSuccess) {                                \
+        std::cerr << "CUDA error: "                           \
+                  << cudaGetErrorString(err) << std::endl;  \
+        exit(EXIT_FAILURE);                                  \
+    }                                                        \
 } while (0)
 
-// =======================================
-// Tensor abstraction (device-side)
-// =======================================
+// =================================================
+// Template Tensor
+// =================================================
+template<typename T>
 struct Tensor {
-    float* data;
+    T* data;
     int rows;
     int cols;
 
-    __device__ int size() const {
-        return rows * cols;
+    __device__ __forceinline__ T get(int r, int c) const {
+        return data[r * cols + c];
     }
 
-    __device__ float get(int row, int col) const {
-        return data[row * cols + col];
-    }
-
-    __device__ void set(int row, int col, float value) {
-        data[row * cols + col] = value;
+    __device__ __forceinline__ void set(int r, int c, T v) {
+        data[r * cols + c] = v;
     }
 };
 
-// =======================================
-// LayerNorm kernel (one thread per row)
-// =======================================
-__global__ void layerNorm(Tensor* A) {
+// =================================================
+// Optimized LayerNorm
+// One block per row
+// =================================================
+__global__ void layerNormOptimized(Tensor<float> A) {
     extern __shared__ float shm[];
 
-    float* mean     = shm;
-    float* variance = shm + A->rows;
-    float* invstd   = shm + 2 * A->rows;
+    float* s_sum = shm;
+    float* s_sq  = shm + blockDim.x;
 
-    int row = threadIdx.x + blockIdx.x * blockDim.x;
+    int row = blockIdx.x;
+    int tid = threadIdx.x;
 
-    if (row >= A->rows) return;
+    float sum = 0.f;
+    float sq  = 0.f;
 
-    // ---- Mean ----
-    float m = 0.0f;
-    for (int j = 0; j < A->cols; j++) {
-        m += A->get(row, j);
+    for (int j = tid; j < A.cols; j += blockDim.x) {
+        float x = A.get(row, j);
+        sum += x;
+        sq  += x * x;
     }
-    m /= A->cols;
-    mean[row] = m;
 
-    // ---- Variance ----
-    float v = 0.0f;
-    for (int j = 0; j < A->cols; j++) {
-        float diff = A->get(row, j) - m;
-        v += diff * diff;
-    }
-    v /= A->cols;
-    variance[row] = v;
-    invstd[row] = rsqrtf(v + 1e-5f);
-
+    s_sum[tid] = sum;
+    s_sq[tid]  = sq;
     __syncthreads();
 
-    // ---- Normalize ----
-    for (int j = 0; j < A->cols; j++) {
-        float x = A->get(row, j);
-        float y = (x - mean[row]) * invstd[row];
-        A->set(row, j, y);
-    }
-}
-
-// =======================================
-// Utility print
-// =======================================
-void printMatrix(const float* data, int rows, int cols, const char* title) {
-    std::cout << title << ":\n";
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data[i * cols + j] << " ";
+    // Reduction
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_sum[tid] += s_sum[tid + stride];
+            s_sq[tid]  += s_sq[tid + stride];
         }
-        std::cout << "\n";
+        __syncthreads();
     }
-    std::cout << std::endl;
+
+    float mean = s_sum[0] / A.cols;
+    float var  = s_sq[0] / A.cols - mean * mean;
+    float invstd = rsqrtf(var + 1e-5f);
+
+    for (int j = tid; j < A.cols; j += blockDim.x) {
+        float x = A.get(row, j);
+        A.set(row, j, (x - mean) * invstd);
+    }
 }
 
-// =======================================
+// =================================================
+// Benchmark helpers
+// =================================================
+float benchmarkKernel(Tensor<float>& d_tensor,
+                      int iterations,
+                      bool useGraph) {
+    cudaEvent_t start, stop;
+    CHECK_CUDA(cudaEventCreate(&start));
+    CHECK_CUDA(cudaEventCreate(&stop));
+
+    cudaGraph_t graph;
+    cudaGraphExec_t graphExec;
+    cudaStream_t stream;
+    CHECK_CUDA(cudaStreamCreate(&stream));
+
+    dim3 block(256);
+    dim3 grid(d_tensor.rows);
+    size_t shm = 2 * block.x * sizeof(float);
+
+    if (useGraph) {
+        CHECK_CUDA(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+        layerNormOptimized<<<grid, block, shm, stream>>>(d_tensor);
+        CHECK_CUDA(cudaStreamEndCapture(stream, &graph));
+        CHECK_CUDA(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+    }
+
+    CHECK_CUDA(cudaEventRecord(start));
+    for (int i = 0; i < iterations; i++) {
+        if (useGraph)
+            cudaGraphLaunch(graphExec, stream);
+        else
+            layerNormOptimized<<<grid, block, shm, stream>>>(d_tensor);
+    }
+    CHECK_CUDA(cudaEventRecord(stop));
+    CHECK_CUDA(cudaEventSynchronize(stop));
+
+    float ms;
+    cudaEventElapsedTime(&ms, start, stop);
+
+    return ms / iterations;
+}
+
+// =================================================
 // Main
-// =======================================
+// =================================================
 int main() {
-    const int rows = 1;
-    const int cols = 3;
-    const int tensorSize = rows * cols;
-    const size_t bytes = tensorSize * sizeof(float);
+    const int rows = 1024;
+    const int cols = 1024;
+    const int N = rows * cols;
+    const int iters = 100;
 
-    // Host data
-    float h_data[tensorSize] = {
-        5.0f, 1.5f, 2.0f
-    };
+    float* h_data = new float[N];
+    for (int i = 0; i < N; i++)
+        h_data[i] = static_cast<float>(i % 100);
 
-    printMatrix(h_data, rows, cols, "Input");
-
-    // Device memory
     float* d_data;
-    CHECK_CUDA(cudaMalloc(&d_data, bytes));
-    CHECK_CUDA(cudaMemcpy(d_data, h_data, bytes, cudaMemcpyHostToDevice));
-
-    // Tensor struct
-    Tensor h_tensor;
-    h_tensor.data = d_data;
-    h_tensor.rows = rows;
-    h_tensor.cols = cols;
-
-    Tensor* d_tensor;
-    CHECK_CUDA(cudaMalloc(&d_tensor, sizeof(Tensor)));
-    CHECK_CUDA(cudaMemcpy(d_tensor, &h_tensor, sizeof(Tensor),
+    CHECK_CUDA(cudaMalloc(&d_data, N * sizeof(float)));
+    CHECK_CUDA(cudaMemcpy(d_data, h_data, N * sizeof(float),
                           cudaMemcpyHostToDevice));
 
-    // Kernel launch
-    int blockSize = 128;
-    int gridSize = (rows + blockSize - 1) / blockSize;
-    size_t sharedMemBytes = 3 * rows * sizeof(float);
+    Tensor<float> d_tensor{d_data, rows, cols};
 
-    layerNorm<<<gridSize, blockSize, sharedMemBytes>>>(d_tensor);
-    CHECK_CUDA(cudaDeviceSynchronize());
+    float normal_ms = benchmarkKernel(d_tensor, iters, false);
+    float graph_ms  = benchmarkKernel(d_tensor, iters, true);
 
-    // Copy back
-    CHECK_CUDA(cudaMemcpy(h_data, d_data, bytes, cudaMemcpyDeviceToHost));
+    std::cout << "Normal kernel: " << normal_ms << " ms\n";
+    std::cout << "CUDA Graph   : " << graph_ms  << " ms\n";
+    std::cout << "Speedup     : " << normal_ms / graph_ms << "x\n";
 
-    printMatrix(h_data, rows, cols, "Normalized Output");
-
-    // Cleanup
     cudaFree(d_data);
-    cudaFree(d_tensor);
-
-    return 0;
+    delete[] h_data;
 }
